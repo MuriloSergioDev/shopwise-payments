@@ -1,0 +1,9 @@
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}
+pre-commit:
+  commands:
+    pint:
+      glob: "*.php"
+      run: sh scripts/php.sh vendor/bin/pint --test {staged_files}

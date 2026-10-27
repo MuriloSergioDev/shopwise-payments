@@ -1,0 +1,22 @@
+name: ci
+on:
+  pull_request:
+  push: { branches: [main] }
+  repository_dispatch:
+    types: [contracts-released]
+
+jobs:
+  hygiene:
+    if: github.event_name == 'pull_request'
+    uses: MuriloSergioDev/shopwise-platform/.github/workflows/pr-hygiene.yml@main
+    permissions: { pull-requests: read }
+
+  quality:
+    uses: MuriloSergioDev/shopwise-platform/.github/workflows/laravel-ci.yml@main
+
+  release:
+    if: github.event_name == 'push'
+    needs: quality
+    uses: MuriloSergioDev/shopwise-platform/.github/workflows/release.yml@main
+    permissions: { contents: write, pull-requests: write }
+    with: { release-type: php }

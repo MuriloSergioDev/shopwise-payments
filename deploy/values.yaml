@@ -1,0 +1,27 @@
+# Values for shopwise-platform/charts/laravel-service. `name` and `image` are set by the Tiltfile.
+# Stripe keys are NOT here: create the `payments-secrets` Secret by hand (see AGENTS.md); the chart loads it with
+# envFrom. Without it the service runs on the fake gateway.
+http:
+  workers: 1
+consumers:
+  # Commands from checkout's saga (ADR-0004).
+  - name: payment-commands
+    topics: [payments.request-payment, payments.refund-payment]
+scheduler:
+  # Runs the outbox relay and payments:expire-stale (the 5-minute payment deadline).
+  enabled: true
+# Topics this service owns: its command topics (the receiver owns them, ADR-0004) and its events.
+topics:
+  - name: payments.request-payment
+    partitions: 3
+  - name: payments.refund-payment
+    partitions: 3
+  - name: payments.payment-succeeded
+    partitions: 3
+  - name: payments.payment-failed
+    partitions: 3
+  - name: payments.refunded
+    partitions: 3
+env:
+  LOG_CHANNEL: stderr
+  OCTANE_SERVER: frankenphp

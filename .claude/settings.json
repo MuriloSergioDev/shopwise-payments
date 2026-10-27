@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "extraKnownMarketplaces": {
+    "shopwise": { "source": { "source": "github", "repo": "MuriloSergioDev/shopwise-platform" } }
+  },
+  "enabledPlugins": { "shopwise@shopwise": true },
+  "enableAllProjectMcpServers": true,
+  "permissions": {
+    "allow": [
+      "Bash(sh scripts/php.sh:*)",
+      "Bash(docker run --rm -v * shopwise-php:base composer check:*)",
+      "Bash(docker run --rm -v * shopwise-php:base vendor/bin/pest:*)",
+      "Bash(kubectl exec deploy/payments-http -- php artisan route:list:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl get:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "mcp__laravel-boost__search-docs",
+      "mcp__laravel-boost__database-schema",
+      "mcp__laravel-boost__application-info"
+    ]
+  }
+}

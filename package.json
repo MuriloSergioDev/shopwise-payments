@@ -1,0 +1,13 @@
+{
+  "name": "shopwise-service-template-tooling",
+  "private": true,
+  "description": "Git hook tooling only (lefthook + commitlint); the service itself is PHP.",
+  "packageManager": "pnpm@12.15.0",
+  "scripts": { "prepare": "lefthook install" },
+  "devDependencies": {
+    "@commitlint/cli": "^21.2.4",
+    "@commitlint/config-conventional": "^21.2.4",
+    "lefthook": "^2.2.2"
+  },
+  "commitlint": { "extends": ["@commitlint/config-conventional"] }
+}

@@ -1,0 +1,20 @@
+{
+    "mcpServers": {
+        "laravel-boost": {
+            "command": "kubectl",
+            "args": [
+                "--context",
+                "k3d-shopwise",
+                "exec",
+                "-i",
+                "deploy/ping-http",
+                "-c",
+                "http",
+                "--",
+                "php",
+                "artisan",
+                "boost:mcp"
+            ]
+        }
+    }
+}
