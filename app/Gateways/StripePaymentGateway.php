@@ -8,6 +8,8 @@ use App\Data\ChargeData;
 use App\Data\IntentResult;
 use App\Enums\FailureReason;
 use App\Enums\IntentStatus;
+use Stripe\Exception\ApiConnectionException;
+use Stripe\Exception\ApiErrorException;
 use Stripe\Exception\CardException;
 use Stripe\Exception\InvalidRequestException;
 use Stripe\PaymentIntent;
@@ -30,8 +32,9 @@ final readonly class StripePaymentGateway implements PaymentGateway
         return match ($intent->status) {
             PaymentIntent::STATUS_SUCCEEDED => new IntentResult($intent->id, IntentStatus::Succeeded),
             PaymentIntent::STATUS_CANCELED => new IntentResult($intent->id, IntentStatus::Canceled),
-            PaymentIntent::STATUS_REQUIRES_ACTION => new IntentResult($intent->id, IntentStatus::RequiresAction),
-            // After a failed attempt the intent goes back to requires_payment_method with the error on it.
+            PaymentIntent::STATUS_REQUIRES_ACTION => new IntentResult($intent->id, IntentStatus::RequiresAction, clientSecret: $intent->client_secret, createdAt: $intent->created),
+            // After a failed attempt (a decline, or failed 3-D Secure) the intent goes back to requires_payment_method
+            // with the error on it.
             PaymentIntent::STATUS_REQUIRES_PAYMENT_METHOD => $error !== null
                 ? new IntentResult($intent->id, IntentStatus::Failed, FailureReason::fromStripe($error->code ?? null, $error->decline_code ?? null), self::message($error->message ?? null))
                 : new IntentResult($intent->id, IntentStatus::Pending),
@@ -47,7 +50,8 @@ final readonly class StripePaymentGateway implements PaymentGateway
                 'currency' => mb_strtolower($charge->currency),
                 'payment_method' => $charge->paymentMethodId,
                 'confirm' => true,
-                // Synchronous confirm only: anything needing a redirect (3-D Secure) is canceled (ADR-0004).
+                // Synchronous confirm; 3-D Secure comes back as requires_action and the storefront finishes it with
+                // stripe.handleNextAction (ADR-0004). No redirect-based methods.
                 'automatic_payment_methods' => ['enabled' => true, 'allow_redirects' => 'never'],
                 'metadata' => $charge->metadata,
             ], ['idempotency_key' => $charge->idempotencyKey]);
@@ -59,9 +63,34 @@ final readonly class StripePaymentGateway implements PaymentGateway
             }
 
             throw $e;
+        } catch (ApiConnectionException $e) {
+            throw new ChargeOutcomeUnknown($e->getMessage(), $e->getCode(), previous: $e);
+        } catch (ApiErrorException $e) {
+            // A 5xx may come after Stripe created and confirmed the intent; a 4xx means nothing happened.
+            if ($e->getHttpStatus() === null || $e->getHttpStatus() >= 500) {
+                throw new ChargeOutcomeUnknown($e->getMessage(), $e->getCode(), previous: $e);
+            }
+
+            throw $e;
         }
 
         return self::toResult($intent);
+    }
+
+    public function find(ChargeData $charge): ?IntentResult
+    {
+        $checkoutId = $charge->metadata['checkoutId'] ?? null;
+        if ($checkoutId === null) {
+            return null;
+        }
+
+        // Search is eventually consistent (about a minute); the deadline sweeper runs later than that.
+        $found = $this->stripe->paymentIntents->search([
+            'query' => sprintf("metadata['checkoutId']:'%s'", str_replace("'", '', $checkoutId)),
+            'limit' => 1,
+        ])->first();
+
+        return $found instanceof PaymentIntent ? self::toResult($found) : null;
     }
 
     public function retrieve(string $intentId): IntentResult
@@ -86,6 +115,11 @@ final readonly class StripePaymentGateway implements PaymentGateway
     public function refund(string $intentId, string $idempotencyKey): string
     {
         return $this->stripe->refunds->create(['payment_intent' => $intentId], ['idempotency_key' => $idempotencyKey])->id;
+    }
+
+    public function latestRefundId(string $intentId): ?string
+    {
+        return $this->stripe->refunds->all(['payment_intent' => $intentId, 'limit' => 1])->first()?->id;
     }
 
     private static function message(?string $message): ?string

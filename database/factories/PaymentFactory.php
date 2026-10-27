@@ -37,6 +37,20 @@ final class PaymentFactory extends Factory
             });
     }
 
+    /**
+     * Waiting for the customer to finish 3-D Secure, created `$minutesAgo` minutes ago (it expires 10 minutes in).
+     */
+    public function requiresAction(int $minutesAgo = 1): self
+    {
+        return $this->state(['status' => PaymentStatus::RequiresAction, 'created_at' => now()->subMinutes($minutesAgo)])
+            ->afterMaking(function (Payment $payment) use ($minutesAgo): void {
+                $payment->stripe_payment_intent_id = 'pi_fake_action_'.Str::lower((string) Str::ulid());
+                $payment->client_secret = $payment->stripe_payment_intent_id.'_secret_fake';
+                $payment->action_required_at = now()->subMinutes($minutesAgo);
+                $payment->action_expires_at = now()->subMinutes($minutesAgo)->addMinutes(10);
+            });
+    }
+
     public function succeeded(): self
     {
         return $this->state(['status' => PaymentStatus::Succeeded])

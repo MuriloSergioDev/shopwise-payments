@@ -23,7 +23,7 @@ enum FailureReason: string
     {
         return match (true) {
             $declineCode === 'insufficient_funds' || $code === 'insufficient_funds' => self::InsufficientFunds,
-            $declineCode === 'authentication_required' || $code === 'authentication_required' => self::AuthenticationRequired,
+            $declineCode === 'authentication_required' || $code === 'authentication_required' || $code === 'payment_intent_authentication_failure' => self::AuthenticationRequired,
             $code === 'card_declined', $code === 'expired_card', $code === 'incorrect_cvc', $code === 'incorrect_number', $code === 'invalid_cvc', $code === 'invalid_expiry_month', $code === 'invalid_expiry_year' => self::CardDeclined,
             default => self::ProcessingError,
         };

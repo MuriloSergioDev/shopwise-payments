@@ -18,6 +18,16 @@ pest()->extend(TestCase::class)->use(RefreshDatabase::class)->in('Feature');
 const CHECKOUT_ID = '01JBCDEFGHJKMNPQRSTVWXYZ40';
 
 /**
+ * Payment attributes matching the contract examples' checkout (refund-payment checks customer, amount and currency).
+ *
+ * @return array{checkout_id: string, customer_id: string, amount: int, currency: string}
+ */
+function exampleCheckout(): array
+{
+    return ['checkout_id' => CHECKOUT_ID, 'customer_id' => '01JBCDEFGHJKMNPQRSTVWXYZ11', 'amount' => 5220, 'currency' => 'USD'];
+}
+
+/**
  * Loads the contract example envelope for an event or command (shopwise-contracts/examples), optionally
  * overriding data fields and the envelope id (a redelivery keeps the id, a re-sent command gets a new one).
  *

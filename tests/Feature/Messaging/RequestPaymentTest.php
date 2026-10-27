@@ -7,6 +7,7 @@ use App\Enums\PaymentStatus;
 use App\Gateways\PaymentGateway;
 use App\Models\Payment;
 use Shopwise\Contracts\Events\Payments\PaymentFailedV1;
+use Shopwise\Contracts\Events\Payments\PaymentRequiresActionV1;
 use Shopwise\Contracts\Events\Payments\PaymentSucceededV1;
 use Shopwise\Contracts\Events\Payments\RefundedV1;
 use Shopwise\Kit\Messaging\DispatchResult;
@@ -80,14 +81,61 @@ it('replies payment-failed when the card is declined', function (string $payment
     'insufficient funds' => ['pm_card_chargeDeclinedInsufficientFunds', FailureReason::InsufficientFunds],
 ]);
 
-it('cancels an intent that needs 3-D Secure and replies authentication_required', function (): void {
+it('keeps an intent that needs 3-D Secure and replies payment-requires-action with its client secret', function (string $paymentMethod): void {
+    $this->freezeTime();
     $gateway = fakeGateway();
 
-    app(MessageDispatcher::class)->dispatch(contractExample('payments.request-payment.v1', ['paymentMethodId' => 'pm_card_authenticationRequired']), 'payments.request-payment');
+    app(MessageDispatcher::class)->dispatch(contractExample('payments.request-payment.v1', ['paymentMethodId' => $paymentMethod]), 'payments.request-payment');
 
-    expect(Payment::query()->sole()->failure_reason)->toBe(FailureReason::AuthenticationRequired)
-        ->and($gateway->methodsCalled())->toBe(['charge', 'cancel'])
-        ->and(recordedEvents(PaymentFailedV1::TYPE)[0]['reason'])->toBe('authentication_required');
+    $payment = Payment::query()->sole();
+    expect($payment->status)->toBe(PaymentStatus::RequiresAction)
+        ->and($gateway->methodsCalled())->toBe(['charge'])
+        ->and(recordedEvents(PaymentFailedV1::TYPE))->toBe([])
+        ->and(recordedEvents(PaymentRequiresActionV1::TYPE))->toEqual([[
+            'paymentId' => $payment->id,
+            'checkoutId' => CHECKOUT_ID,
+            'customerId' => '01JBCDEFGHJKMNPQRSTVWXYZ11',
+            'amount' => 5220,
+            'currency' => 'USD',
+            'stripePaymentIntentId' => $payment->stripe_payment_intent_id,
+            'clientSecret' => $payment->stripe_payment_intent_id.'_secret_fake',
+            'expiresAt' => now()->addMinutes(10)->toIso8601ZuluString(),
+            'requiredAt' => now()->toIso8601ZuluString(),
+        ]]);
+})->with(['pm_card_threeDSecure2Required', 'pm_card_authenticationRequired']);
+
+it('re-publishes payment-requires-action while the customer has not finished 3-D Secure', function (): void {
+    $gateway = fakeGateway();
+    $dispatcher = app(MessageDispatcher::class);
+
+    $dispatcher->dispatch(contractExample('payments.request-payment.v1', ['paymentMethodId' => 'pm_card_threeDSecure2Required']), 'payments.request-payment');
+    $dispatcher->dispatch(contractExample('payments.request-payment.v1', ['paymentMethodId' => 'pm_card_threeDSecure2Required'], '01JBCDEFGHJKMNPQRSTVWXYZ99'), 'payments.request-payment');
+
+    $events = recordedEvents(PaymentRequiresActionV1::TYPE);
+    expect($gateway->methodsCalled())->toBe(['charge', 'retrieve'])
+        ->and($events)->toHaveCount(2)
+        ->and($events[1])->toBe($events[0]);
+});
+
+it('keeps the payment when Stripe may have charged but its answer was lost, and finds the intent on a re-send', function (): void {
+    $gateway = fakeGateway();
+    $dispatcher = app(MessageDispatcher::class);
+
+    expect($dispatcher->dispatch(contractExample('payments.request-payment.v1', ['paymentMethodId' => 'pm_fake_lostResponse']), 'payments.request-payment'))
+        ->toBe(DispatchResult::Handled);
+
+    $payment = Payment::query()->sole();
+    expect($payment->status)->toBe(PaymentStatus::Processing)
+        ->and($payment->stripe_payment_intent_id)->toBeNull()
+        ->and(recordedEvents(PaymentSucceededV1::TYPE))->toBe([]);
+
+    $dispatcher->dispatch(contractExample('payments.request-payment.v1', ['paymentMethodId' => 'pm_fake_lostResponse'], '01JBCDEFGHJKMNPQRSTVWXYZ99'), 'payments.request-payment');
+
+    expect($payment->refresh()->status)->toBe(PaymentStatus::Succeeded)
+        ->and($payment->stripe_payment_intent_id)->toStartWith('pi_fake_succeeded_')
+        ->and($gateway->methodsCalled())->toBe(['charge', 'find'])
+        ->and($gateway->calls[1]['idempotencyKey'])->toBe('checkout-'.CHECKOUT_ID.'-pay')
+        ->and(recordedEvents(PaymentSucceededV1::TYPE))->toHaveCount(1);
 });
 
 it('leaves a payment that is not final processing and replies nothing yet', function (): void {
@@ -123,7 +171,7 @@ it('re-publishes refunded when the payment was already refunded', function (): v
         ->and(recordedEvents(RefundedV1::TYPE))->toHaveCount(1);
 });
 
-it('rolls back and lets the consumer retry when Stripe cannot be reached', function (): void {
+it('rolls back and lets the consumer retry when Stripe refuses the request', function (): void {
     $gateway = Mockery::mock(PaymentGateway::class);
     $gateway->shouldReceive('charge')->twice()->andThrow(new RuntimeException('Stripe is down'));
     app()->instance(PaymentGateway::class, $gateway);

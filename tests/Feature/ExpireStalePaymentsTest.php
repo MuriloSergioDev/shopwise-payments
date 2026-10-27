@@ -44,3 +44,31 @@ it('leaves finished payments alone', function (): void {
     expect($gateway->calls)->toBe([])
         ->and(recordedEvents(PaymentFailedV1::TYPE))->toBe([]);
 });
+
+it('gives a payment waiting for 3-D Secure ten minutes, then cancels it and replies timeout', function (): void {
+    $gateway = fakeGateway();
+    $expired = Payment::factory()->requiresAction(minutesAgo: 11)->create();
+    $waiting = Payment::factory()->requiresAction(minutesAgo: 7)->create();
+
+    $this->artisan('payments:expire-stale')->assertSuccessful();
+
+    expect($expired->refresh()->status)->toBe(PaymentStatus::Failed)
+        ->and($expired->failure_reason)->toBe(FailureReason::Timeout)
+        ->and($waiting->refresh()->status)->toBe(PaymentStatus::RequiresAction)
+        ->and($gateway->methodsCalled())->toBe(['retrieve', 'cancel'])
+        ->and(recordedEvents(PaymentFailedV1::TYPE))->toHaveCount(1)
+        ->and(recordedEvents(PaymentFailedV1::TYPE)[0]['reason'])->toBe('timeout');
+});
+
+it('looks up a stale payment whose charge answer was lost and settles what Stripe did', function (): void {
+    $gateway = fakeGateway();
+    $charged = Payment::factory()->create(['payment_method_id' => 'pm_fake_lostResponse', 'created_at' => now()->subMinutes(6)]);
+    $nothing = Payment::factory()->create(['created_at' => now()->subMinutes(6)]);
+
+    $this->artisan('payments:expire-stale')->assertSuccessful();
+
+    expect($charged->refresh()->status)->toBe(PaymentStatus::Succeeded)
+        ->and($nothing->refresh()->status)->toBe(PaymentStatus::Failed)
+        ->and($nothing->failure_reason)->toBe(FailureReason::Timeout)
+        ->and($gateway->methodsCalled())->toBe(['find', 'find']);
+});

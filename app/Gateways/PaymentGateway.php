@@ -15,8 +15,16 @@ interface PaymentGateway
 {
     /**
      * Creates and confirms a PaymentIntent (no redirects). The same idempotency key returns the same intent.
+     *
+     * @throws ChargeOutcomeUnknown when Stripe may have created (and charged) the intent but no answer came back
      */
     public function charge(ChargeData $charge): IntentResult;
+
+    /**
+     * The PaymentIntent an earlier charge() created for this checkout (found by its metadata), if any. Reconciles a
+     * charge whose outcome is unknown.
+     */
+    public function find(ChargeData $charge): ?IntentResult;
 
     public function retrieve(string $intentId): IntentResult;
 
@@ -26,7 +34,12 @@ interface PaymentGateway
     public function cancel(string $intentId): IntentResult;
 
     /**
-     * Refunds a succeeded PaymentIntent in full and returns the refund id.
+     * Refunds what is left of a succeeded PaymentIntent and returns the refund id.
      */
     public function refund(string $intentId, string $idempotencyKey): string;
+
+    /**
+     * The id of the newest refund of a PaymentIntent, for refunds made outside the saga.
+     */
+    public function latestRefundId(string $intentId): ?string;
 }

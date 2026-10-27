@@ -3,10 +3,13 @@
 declare(strict_types=1);
 
 use App\Data\ChargeData;
+use App\Data\IntentResult;
 use App\Enums\FailureReason;
 use App\Enums\IntentStatus;
+use App\Gateways\ChargeOutcomeUnknown;
 use App\Gateways\StripePaymentGateway;
 use Stripe\ApiRequestor;
+use Stripe\Exception\InvalidRequestException;
 use Stripe\HttpClient\ClientInterface;
 use Stripe\StripeClient;
 
@@ -100,4 +103,46 @@ it('maps intents that are not final to pending', function (): void {
     $http = new StripeHttpStub([[200, stripeIntent('pi_5', 'processing')]]);
 
     expect(stripeGateway($http)->retrieve('pi_5')->status)->toBe(IntentStatus::Pending);
+});
+
+it('keeps the client secret and creation time of an intent that needs 3-D Secure', function () use ($charge): void {
+    $http = new StripeHttpStub([[200, [...stripeIntent('pi_6', 'requires_action'), 'client_secret' => 'pi_6_secret_abc', 'created' => 1793000000]]]);
+
+    $result = stripeGateway($http)->charge($charge);
+
+    expect($result->status)->toBe(IntentStatus::RequiresAction)
+        ->and($result->clientSecret)->toBe('pi_6_secret_abc')
+        ->and($result->createdAt)->toBe(1793000000);
+});
+
+it('reports an unknown outcome when Stripe answers 5xx', function () use ($charge): void {
+    $http = new StripeHttpStub([[500, ['error' => ['type' => 'api_error', 'message' => 'Something went wrong']]]]);
+
+    expect(fn (): IntentResult => stripeGateway($http)->charge($charge))->toThrow(ChargeOutcomeUnknown::class);
+});
+
+it('rethrows a request Stripe refused, since nothing was charged', function () use ($charge): void {
+    $http = new StripeHttpStub([[400, ['error' => ['type' => 'invalid_request_error', 'message' => 'No such PaymentMethod']]]]);
+
+    expect(fn (): IntentResult => stripeGateway($http)->charge($charge))->toThrow(InvalidRequestException::class);
+});
+
+it('finds the intent of a checkout by its metadata', function () use ($charge): void {
+    $http = new StripeHttpStub([
+        [200, ['object' => 'search_result', 'data' => [stripeIntent('pi_7', 'succeeded')], 'has_more' => false, 'url' => '/v1/payment_intents/search']],
+        [200, ['object' => 'search_result', 'data' => [], 'has_more' => false, 'url' => '/v1/payment_intents/search']],
+    ]);
+    $gateway = stripeGateway($http);
+
+    expect($gateway->find($charge)?->intentId)->toBe('pi_7')
+        ->and($gateway->find($charge))->toBeNull()
+        ->and($http->requests[0]['url'])->toContain('/v1/payment_intents/search')
+        ->and($http->requests[0]['params'])->toBe(['query' => "metadata['checkoutId']:'01JB'", 'limit' => 1]);
+});
+
+it('reads the newest refund of an intent', function (): void {
+    $http = new StripeHttpStub([[200, ['object' => 'list', 'data' => [['id' => 're_9', 'object' => 'refund']], 'has_more' => false, 'url' => '/v1/refunds']]]);
+
+    expect(stripeGateway($http)->latestRefundId('pi_8'))->toBe('re_9')
+        ->and($http->requests[0]['params'])->toBe(['payment_intent' => 'pi_8', 'limit' => 1]);
 });

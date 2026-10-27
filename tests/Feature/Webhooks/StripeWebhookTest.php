@@ -12,6 +12,30 @@ use Shopwise\Contracts\Events\Payments\PaymentSucceededV1;
 use Shopwise\Contracts\Events\Payments\RefundedV1;
 
 /**
+ * A Charge object as Stripe sends it in charge.refunded. `refunds` is listed only when a refund id is given (newer
+ * API versions leave it out).
+ *
+ * @return array<string, mixed>
+ */
+function stripeCharge(Payment $payment, int $amountRefunded, ?string $refundId = null): array
+{
+    $charge = [
+        'id' => 'ch_test_1',
+        'object' => 'charge',
+        'amount' => $payment->amount,
+        'amount_refunded' => $amountRefunded,
+        'payment_intent' => $payment->stripe_payment_intent_id,
+        'refunded' => $amountRefunded >= $payment->amount,
+    ];
+
+    if ($refundId !== null) {
+        $charge['refunds'] = ['object' => 'list', 'data' => [['id' => $refundId, 'object' => 'refund', 'amount' => $amountRefunded]], 'has_more' => false];
+    }
+
+    return $charge;
+}
+
+/**
  * Posts a raw body like Stripe does.
  */
 function postWebhook(string $payload, ?string $signature): TestResponse
@@ -77,21 +101,93 @@ it('fails a processing payment as canceled on payment_intent.canceled', function
     expect($payment->refresh()->failure_reason)->toBe(FailureReason::Canceled);
 });
 
-it('marks a payment refunded outside the saga on charge.refunded without an event', function (): void {
-    fakeGateway();
-    $payment = Payment::factory()->succeeded()->create();
+it('publishes refunded with reason external for a partial refund made outside the saga', function (): void {
+    $this->freezeTime();
+    $gateway = fakeGateway();
+    $payment = Payment::factory()->succeeded()->create(['amount' => 5220]);
 
-    [$payload, $signature] = stripeEvent('charge.refunded', [
-        'id' => 'ch_test_1',
-        'object' => 'charge',
-        'payment_intent' => $payment->stripe_payment_intent_id,
-        'refunded' => true,
-    ]);
+    [$payload, $signature] = stripeEvent('charge.refunded', stripeCharge($payment, 2000, 're_dash_1'));
     postWebhook($payload, $signature)->assertOk();
 
     expect($payment->refresh()->status)->toBe(PaymentStatus::Refunded)
-        ->and($payment->refunded_at)->not->toBeNull()
+        ->and($payment->refund_reason)->toBe('external')
+        ->and($payment->refunded_amount)->toBe(2000)
+        ->and($gateway->calls)->toBe([])
+        ->and(recordedEvents(RefundedV1::TYPE))->toEqual([[
+            'paymentId' => $payment->id,
+            'checkoutId' => $payment->checkout_id,
+            'customerId' => $payment->customer_id,
+            'amount' => 2000,
+            'currency' => 'USD',
+            'reason' => 'external',
+            'stripeRefundId' => 're_dash_1',
+            'refundedAt' => now()->toIso8601ZuluString(),
+        ]]);
+
+    [$payload, $signature] = stripeEvent('charge.refunded', stripeCharge($payment, 5220), 'evt_test_2');
+    postWebhook($payload, $signature)->assertOk();
+
+    $events = recordedEvents(RefundedV1::TYPE);
+    expect($payment->refresh()->refunded_amount)->toBe(5220)
+        ->and($events)->toHaveCount(2)
+        ->and($events[1]['amount'])->toBe(3220)
+        ->and($events[1]['stripeRefundId'])->toStartWith('re_fake_external_')
+        ->and($gateway->methodsCalled())->toBe(['latestRefundId']);
+});
+
+it('does not treat a refund the saga made as external', function (): void {
+    $payment = Payment::factory()->refunded()->create(['amount' => 5220, 'refunded_amount' => 5220]);
+
+    [$payload, $signature] = stripeEvent('charge.refunded', stripeCharge($payment, 5220, 're_saga'));
+    postWebhook($payload, $signature)->assertOk();
+
+    expect($payment->refresh()->refund_reason)->toBe('order_rejected')
         ->and(recordedEvents(RefundedV1::TYPE))->toBe([]);
+});
+
+it('finishes a 3-D Secure payment on payment_intent.succeeded', function (): void {
+    fakeGateway();
+    $payment = Payment::factory()->requiresAction()->create();
+
+    [$payload, $signature] = stripeEvent('payment_intent.succeeded', stripeIntent((string) $payment->stripe_payment_intent_id, 'succeeded'));
+    postWebhook($payload, $signature)->assertOk();
+
+    expect($payment->refresh()->status)->toBe(PaymentStatus::Succeeded)
+        ->and($payment->client_secret)->toBeNull()
+        ->and(recordedEvents(PaymentSucceededV1::TYPE))->toHaveCount(1);
+});
+
+it('fails a 3-D Secure payment the customer could not authenticate with authentication_required', function (): void {
+    fakeGateway();
+    $payment = Payment::factory()->requiresAction()->create();
+
+    [$payload, $signature] = stripeEvent('payment_intent.payment_failed', stripeIntent((string) $payment->stripe_payment_intent_id, 'requires_payment_method', [
+        'type' => 'invalid_request_error',
+        'code' => 'payment_intent_authentication_failure',
+        'message' => 'We are unable to authenticate your payment method.',
+    ]));
+    postWebhook($payload, $signature)->assertOk();
+
+    expect($payment->refresh()->status)->toBe(PaymentStatus::Failed)
+        ->and($payment->failure_reason)->toBe(FailureReason::AuthenticationRequired)
+        ->and(recordedEvents(PaymentFailedV1::TYPE)[0])->toMatchArray([
+            'reason' => 'authentication_required',
+            'message' => 'We are unable to authenticate your payment method.',
+        ]);
+});
+
+it('finds a payment whose charge answer was lost by the checkout in the intent metadata', function (): void {
+    fakeGateway();
+    $payment = Payment::factory()->create();
+
+    [$payload, $signature] = stripeEvent('payment_intent.succeeded', [
+        ...stripeIntent('pi_lost_1', 'succeeded'),
+        'metadata' => ['checkoutId' => $payment->checkout_id],
+    ]);
+    postWebhook($payload, $signature)->assertOk();
+
+    expect($payment->refresh()->status)->toBe(PaymentStatus::Succeeded)
+        ->and($payment->stripe_payment_intent_id)->toBe('pi_lost_1');
 });
 
 it('acknowledges event types it does not handle and intents it does not know', function (): void {

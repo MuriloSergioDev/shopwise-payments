@@ -10,8 +10,9 @@ use App\Models\Payment;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
+use Illuminate\Database\Eloquent\Builder;
 
-#[Description('Settle or cancel payments still processing after the deadline (payments.deadline_seconds)')]
+#[Description('Settle or cancel payments still pending after their deadline (payments.deadline_seconds, or the 3-D Secure action_expires_at)')]
 #[Signature('payments:expire-stale')]
 final class ExpireStalePaymentsCommand extends Command
 {
@@ -20,8 +21,8 @@ final class ExpireStalePaymentsCommand extends Command
         $deadline = now()->subSeconds(config()->integer('payments.deadline_seconds'));
 
         Payment::query()
-            ->where('status', PaymentStatus::Processing)
-            ->where('created_at', '<=', $deadline)
+            ->where(fn (Builder $query) => $query->where('status', PaymentStatus::Processing)->where('created_at', '<=', $deadline))
+            ->orWhere(fn (Builder $query) => $query->where('status', PaymentStatus::RequiresAction)->where('action_expires_at', '<=', now()))
             ->orderBy('id')
             ->get(['id'])
             ->each(fn (Payment $payment) => $expirePayment->handle($payment->id));

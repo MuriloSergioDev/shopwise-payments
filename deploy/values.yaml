@@ -8,7 +8,7 @@ consumers:
   - name: payment-commands
     topics: [payments.request-payment, payments.refund-payment]
 scheduler:
-  # Runs the outbox relay and payments:expire-stale (the 5-minute payment deadline).
+  # Runs the outbox relay and payments:expire-stale (the 5-minute payment deadline, 10 minutes for 3-D Secure).
   enabled: true
 # Topics this service owns: its command topics (the receiver owns them, ADR-0004) and its events.
 topics:
@@ -19,6 +19,8 @@ topics:
   - name: payments.payment-succeeded
     partitions: 3
   - name: payments.payment-failed
+    partitions: 3
+  - name: payments.payment-requires-action
     partitions: 3
   - name: payments.refunded
     partitions: 3

@@ -15,7 +15,7 @@ enum IntentStatus: string
     /** `requires_payment_method` after a failed attempt: declined. */
     case Failed = 'failed';
 
-    /** `requires_action` (3-D Secure): out of scope, we cancel it. */
+    /** `requires_action` (3-D Secure): the customer must authenticate; the webhook finishes it. */
     case RequiresAction = 'requires_action';
 
     /** `canceled`. */
