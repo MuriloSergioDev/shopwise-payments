@@ -88,16 +88,18 @@ final readonly class RefundPayment
      */
     private function replyNoPayment(RefundPaymentV1 $command): void
     {
-        Outbox::record(PaymentFailedV1::TYPE, $command->checkoutId, [
-            'paymentId' => null,
-            'checkoutId' => $command->checkoutId,
-            'customerId' => '',
-            'amount' => 0,
-            'currency' => config()->string('payments.currency'),
-            'reason' => 'canceled',
-            'message' => null,
-            'stripePaymentIntentId' => null,
-            'failedAt' => Carbon::now('UTC')->toIso8601ZuluString(),
-        ], PaymentFailedV1::SCHEMA);
+        $event = new PaymentFailedV1(
+            paymentId: null,
+            checkoutId: $command->checkoutId,
+            customerId: '',
+            amount: 0,
+            currency: config()->string('payments.currency'),
+            reason: FailureReason::Canceled->value,
+            message: null,
+            stripePaymentIntentId: null,
+            failedAt: Carbon::now('UTC')->toIso8601ZuluString(),
+        );
+
+        Outbox::record(PaymentFailedV1::TYPE, $command->checkoutId, $event->toArray(), PaymentFailedV1::SCHEMA);
     }
 }

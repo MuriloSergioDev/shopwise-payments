@@ -12,6 +12,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Carbon;
+use Shopwise\Contracts\Events\Payments\PaymentFailedV1;
 use Shopwise\Contracts\Events\Payments\PaymentSucceededV1;
 use Shopwise\Contracts\Events\Payments\RefundedV1;
 
@@ -57,25 +58,19 @@ final class Payment extends Model
         );
     }
 
-    /**
-     * payments.payment-failed data. Built as an array: the generated DTO types the schema's nullable fields
-     * (`message`, `stripePaymentIntentId`) as plain strings.
-     *
-     * @return array<string, mixed>
-     */
-    public function failedEventData(): array
+    public function failedEvent(): PaymentFailedV1
     {
-        return [
-            'paymentId' => $this->id,
-            'checkoutId' => $this->checkout_id,
-            'customerId' => $this->customer_id,
-            'amount' => $this->amount,
-            'currency' => $this->currency,
-            'reason' => ($this->failure_reason ?? FailureReason::ProcessingError)->value,
-            'message' => $this->failure_message,
-            'stripePaymentIntentId' => $this->stripe_payment_intent_id,
-            'failedAt' => ($this->failed_at ?? $this->updated_at)->toIso8601ZuluString(),
-        ];
+        return new PaymentFailedV1(
+            paymentId: $this->id,
+            checkoutId: $this->checkout_id,
+            customerId: $this->customer_id,
+            amount: $this->amount,
+            currency: $this->currency,
+            reason: ($this->failure_reason ?? FailureReason::ProcessingError)->value,
+            message: $this->failure_message,
+            stripePaymentIntentId: $this->stripe_payment_intent_id,
+            failedAt: ($this->failed_at ?? $this->updated_at)->toIso8601ZuluString(),
+        );
     }
 
     public function refundedEvent(): RefundedV1

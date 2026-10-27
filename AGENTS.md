@@ -36,8 +36,8 @@ structure, checks and how to run PHP are described there and still apply.
   Stripe event id. Handles `payment_intent.succeeded|payment_failed|canceled` and `charge.refunded`; others are 200
   and ignored. `charge.refunded` for a payment still `succeeded` (a dashboard refund) marks it refunded without an
   event: no saga reason fits.
-- `payment-failed` data is built as an array (`Payment::failedEventData`), not with the generated DTO, because the
-  DTO types the schema's nullable fields as `string`.
+- Event data always comes from the generated contract classes (`Payment::succeededEvent()`, `failedEvent()`,
+  `refundedEvent()`); nullable schema fields are nullable properties there.
 
 ## Stripe (test mode only)
 Keys come only from env. Never commit them; `.env.example` has empty placeholders.

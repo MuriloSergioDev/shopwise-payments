@@ -23,7 +23,7 @@ final readonly class PublishPaymentOutcome
         DB::transaction(function () use ($payment): void {
             match ($payment->status) {
                 PaymentStatus::Succeeded => Outbox::record(PaymentSucceededV1::TYPE, $payment->id, $payment->succeededEvent()->toArray(), PaymentSucceededV1::SCHEMA),
-                PaymentStatus::Failed => Outbox::record(PaymentFailedV1::TYPE, $payment->id, $payment->failedEventData(), PaymentFailedV1::SCHEMA),
+                PaymentStatus::Failed => Outbox::record(PaymentFailedV1::TYPE, $payment->id, $payment->failedEvent()->toArray(), PaymentFailedV1::SCHEMA),
                 PaymentStatus::Refunded => Outbox::record(RefundedV1::TYPE, $payment->id, $payment->refundedEvent()->toArray(), RefundedV1::SCHEMA),
                 PaymentStatus::Processing => null,
             };
